@@ -1,0 +1,42 @@
+name: xss-defense-test
+
+# 자동(push)으로 돌리지 않는다.
+#  - 매 커밋마다 스테이징을 두드리지 않기 위함
+#  - 수동 실행(workflow_dispatch) 또는 야간 스케줄로만 트리거
+on:
+  workflow_dispatch:
+  # 필요하면 스케줄 사용(UTC 기준). 예: 매일 18:00 UTC
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+jobs:
+  xss-test:
+    # ⚠ 대상 SSO 서버가 내부망에만 있으면 GitHub 클라우드 러너에서 접근 불가.
+    #    그 경우 사내망에 self-hosted runner를 두고 아래를 바꾼다:
+    #      runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Compile (UTF-8)
+        run: javac -encoding UTF-8 XssDefenseTester.java
+
+      - name: Run XSS defense tests
+        env:
+          # 민감/환경 값은 GitHub Secrets 로 주입 (코드/워크플로에 하드코딩 금지)
+          #   Settings > Secrets and variables > Actions 에서 등록
+          SSO_BASE_URL:     ${{ secrets.SSO_BASE_URL }}
+          SSO_REG_HOST:     ${{ secrets.SSO_REG_HOST }}
+          SSO_UNREG_HOST:   ${{ secrets.SSO_UNREG_HOST }}
+          SSO_ATTACKER_HOST: ${{ secrets.SSO_ATTACKER_HOST }}
+          SSO_COOKIE:       ${{ secrets.SSO_COOKIE }}
+        # 콘솔 한글 출력을 위해 UTF-8 지정. FAIL/ERROR 시 exit 1 → 잡 실패로 게이트.
+        run: java -Dfile.encoding=UTF-8 XssDefenseTester
