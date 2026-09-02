@@ -28,32 +28,75 @@ SSO 8.1의 XSS 방어(`XssInterceptor` + 신규 `HubSecurityInterceptor`(`/hub`)
 (대소문자 변형, 개행 삽입, 단어목록에 없는 함수 사용 등)를 포함했다. `XssDefenseTester.java`의
 `buildCases()`에서 케이스 ID로 그룹을 구분한다(`C1-*`, `C2-*`, `C3-*`, `C4-*`).
 
+### 파라미터 "이름" 대소문자 우회 확인 (`*-PARAMCASE-*`)
+
+값이 아니라 **파라미터 키 이름**의 대소문자를 바꿔서 보내는 케이스다(`RETURNURL`, `ReturnUrl`,
+`returnurl`, `TP`, `Tp`). 보안 검증 로직이 정확히 `returnURL`/`tp`라는 리터럴 키로만 값을
+읽는데, 실제 값을 소비하는 로직은 대소문자를 무시하고 파라미터를 찾는 경로가 따로 있다면
+**검증은 스킵되고 값은 그대로 쓰이는 불일치**가 생길 수 있다. `HubSecurityInterceptor`의
+`HOST_NOT_ALLOWED` 체크처럼 특정 파라미터명을 콕 집어 검사하는 로직에서 특히 의미가 크다.
+
+⚠ 주의: 서블릿 스펙상 파라미터 이름은 대소문자를 구분하므로, 애플리케이션이 정말 아무 경로로도
+대소문자 무시 매칭을 하지 않는다면 이 케이스들은 그냥 **"파라미터를 전혀 못 읽어서 반사도
+없는" 상태**가 되어 PASS로 나온다. 이건 "안전하게 처리됨"이 아니라 "애초에 값이 안 쓰인 것"이라
+같은 PASS라도 의미가 다르다. 결과가 PASS로 나오면, 같은 값을 정상 케이스(`returnURL`)로 보냈을
+때와 동작(리다이렉트 여부, 화면 변화)이 실제로 달라지는지 비교해서 "값이 쓰였는지 여부"를
+한 번 더 확인하는 게 좋다.
+
+### 백틱(템플릿 리터럴) 함수 호출 우회 (`*-BACKTICK-*`)
+
+실사용 중 `smartworkPortlet.jsp`의 `tp`에서 **실제로 실행이 확인된** payload를 케이스로 추가했다.
+
+```
+tp=ep/smartwork_header.jsp";confirm`XSS`//
+```
+
+JavaScript는 `` 함수명`템플릿리터럴` `` 형태(태그드 템플릿)로 함수를 호출할 수 있어서, **괄호
+`(` `)` 없이도 함수를 실행**시킬 수 있다. 여기에 `location`처럼 리스트에 있을 법한 흔한 단어
+대신 `confirm`/`alert`처럼 blacklist에 없을 만한 함수명을 쓰면, `<,>,(,)` 같은 특수문자 목록과
+`script,onmouseover,...` 같은 단어 목록을 동시에 봐야 걸리는 구식 블랙리스트 검사를 둘 다
+피해간다. 앞에 `ep/smartwork_header.jsp` 같은 정상처럼 보이는 문자열을 붙인 것도 관찰된 그대로
+포함했고(`C2-BACKTICK-1`), 접두사 없이도 재현되는지 확인하는 케이스(`C2-BACKTICK-2/3`), 다른
+함수명(`C2-BACKTICK-4`), "location" 단어 자체를 문자열 분할로 회피하는 케이스(`C2-BACKTICK-5`)도
+추가했다. 같은 계열 검사를 `C1`, `C3`(속성 컨텍스트), `C4`에도 넣었다.
+
+이 발견에 맞춰 `judgeJsString()` 판정 로직도 고쳤다. 기존에는 `";alert(`, `';fetch(`처럼
+**특정 함수명이 포함된 고정 문자열 목록**만 검사해서 `confirm\`XSS\`` 같은 백틱 호출을 놓쳤다.
+지금은 함수명에 의존하지 않고, **payload 문자열 자체가 script 영역에 escape 없이 그대로
+남아있는지**를 직접 확인한다 — 선행 따옴표가 제대로 인코딩되면 이 매칭은 자연히 깨지므로
+안전한 경우까지 오탐하지는 않는다.
+
 ## 로컬 실행 (Windows PowerShell)
 
 Java 8이 이미 설치되어 있다면 바로 실행 가능하다.
 
+⚠ **`_JAVA_OPTIONS` 환경변수가 이미 `-Dfile.encoding=UTF-8`을 설정하는 환경이라면,
+실행 명령에 `-Dfile.encoding=UTF-8`을 또 넣지 말 것.** 중복되면 JVM 인자 파싱이 꼬여서
+`오류: 기본 클래스 .encoding=UTF-8을(를) 찾거나 로드할 수 없습니다`가 발생한다.
+(`echo $env:_JAVA_OPTIONS` 로 먼저 확인해보면 된다.)
+
 ```powershell
-cd D:\project\claude\xss-defense-tester
+cd "D:\project\Claude Code\sso-xss-defense-tester"
 
 # 1) 컴파일 (한글 주석 때문에 -encoding UTF-8 필수)
 javac -encoding UTF-8 XssDefenseTester.java
 
 # 2) 대상 서버/등록 호스트 지정 (본인 로컬 서버 값으로 교체)
-$env:SSO_BASE_URL    = "http://localhost:8080"   # 로컬에서 띄운 SSO/hub/LGTSSO 서버 주소
+$env:SSO_BASE_URL    = "http://localhost:8090"   # 로컬에서 띄운 SSO/hub/LGTSSO 서버 주소
 $env:SSO_REG_HOST    = "localhost"                # 실제 등록된 SSO 사이트 host
 $env:SSO_UNREG_HOST  = "unregistered.example"     # 미등록 host (그대로 사용 가능)
 $env:SSO_ATTACKER_HOST = "attacker.example"       # 판정용 문자열, 실제 호출 안 됨
 # 인증이 필요한 엔드포인트면 세션 쿠키도 지정
 # $env:SSO_COOKIE = "JSESSIONID=...."
 
-# 3) 실행
-java -Dfile.encoding=UTF-8 XssDefenseTester
+# 3) 실행 (※ -Dfile.encoding=UTF-8 을 추가로 넣지 않는다)
+java XssDefenseTester
 ```
 
 또는 CLI 인자로 baseUrl / regHost 만 빠르게 지정:
 
 ```powershell
-java -Dfile.encoding=UTF-8 XssDefenseTester http://localhost:8080 localhost
+java XssDefenseTester http://localhost:8090 localhost
 ```
 
 실행하면 콘솔에 **각 케이스가 실제로 호출한 전체 URL**이 그대로 출력되고

@@ -63,7 +63,7 @@ public class XssDefenseTester {
      * 1. 설정 — 이 블록 또는 환경변수/CLI 인자로 지정한다.
      * ============================================================ */
     static final class Config {
-        String baseUrl          = "http://localhost:8080"; // 로컬 실행 기본값
+        String baseUrl          = "http://localhost:8090"; // 로컬 실행 기본값 (local-tomcat 기본 HTTP 포트)
         String registeredHost   = "localhost";              // 문서 7.1 registered.example 대체(등록된 SSO 사이트)
         String unregisteredHost = "unregistered.example";
         String attackerHost     = "attacker.example";       // 문자열 판정용. 실제 호출 안 함.
@@ -171,6 +171,11 @@ public class XssDefenseTester {
                 "';location='https://" + atk + "';//", Expect.SAFE));
         cs.add(new Case("C1-JS-5", Ctx.JS_STRING, p1, Method.GET, "returnURL",
                 "</script><script>alert(1)</script>", Expect.SAFE));
+        // (추가) 백틱 함수 호출 우회 — "(" ")" 없이 confirm/alert 호출, blacklist 단어 회피
+        cs.add(new Case("C1-BACKTICK-1", Ctx.JS_STRING, p1, Method.GET, "returnURL",
+                "\";confirm`XSS`//", Expect.SAFE));
+        cs.add(new Case("C1-BACKTICK-2", Ctx.JS_STRING, p1, Method.GET, "returnURL",
+                "';confirm`XSS`//", Expect.SAFE));
 
         // (추가) returnURL의 이동 대상 검증 — 문서 7.1 기준. 같은 파라미터이므로 회귀 확인용으로 포함.
         cs.add(new Case("C1-URL-1", Ctx.URL_MOVE, p1, Method.GET, "returnURL",
@@ -179,6 +184,15 @@ public class XssDefenseTester {
                 "//" + reg + "/path", Expect.SAFE));
         cs.add(new Case("C1-URL-3", Ctx.URL_MOVE, p1, Method.GET, "returnURL",
                 "https://" + reg + "/path", Expect.FUNCTIONAL));
+
+        // (추가) 파라미터 "이름" 대소문자 우회 확인 — 검증 로직이 정확히 "returnURL" 키만 보는데
+        // 실제 값 소비 로직은 대소문자 무시로 파라미터를 읽는 불일치가 있는지 확인.
+        cs.add(new Case("C1-PARAMCASE-1", Ctx.JS_STRING, p1, Method.GET, "RETURNURL",
+                "';location='https://" + atk + "';//", Expect.SAFE));
+        cs.add(new Case("C1-PARAMCASE-2", Ctx.HTML_ATTR, p1, Method.GET, "ReturnUrl",
+                "\" onmouseover=\"alert(1)", Expect.SAFE));
+        cs.add(new Case("C1-PARAMCASE-3", Ctx.URL_MOVE, p1, Method.GET, "returnurl",
+                "javascript:alert(1)", Expect.SAFE));
 
         // ===================================================================
         // Case2: /LGTSSO/portlets/smartworkPortlet.jsp  (tp) — JavaScript 컨텍스트 반사
@@ -203,6 +217,23 @@ public class XssDefenseTester {
                 "';ALERT(1);//", Expect.SAFE));
         cs.add(new Case("C2-BYPASS-NEWLINE", Ctx.JS_STRING, p2, Method.GET, "tp",
                 "';\nalert(1);//", Expect.SAFE));
+        // (추가) 파라미터 이름 대소문자 우회 확인
+        cs.add(new Case("C2-PARAMCASE-1", Ctx.JS_STRING, p2, Method.GET, "TP",
+                "';alert(1);//", Expect.SAFE));
+
+        // (추가) 백틱(템플릿 리터럴) 함수 호출 우회 — 실사용 중 확인된 실제 우회.
+        // "(" ")" 없이 `confirm\`XSS\`` 형태로 함수를 호출할 수 있고, "location" 같은 흔한
+        // 단어 대신 blacklist에 없는 함수명을 쓰면 XSS-MARK(<,>,(,))도, XSS-WORD도 둘 다 피해간다.
+        cs.add(new Case("C2-BACKTICK-1", Ctx.JS_STRING, p2, Method.GET, "tp",
+                "ep/smartwork_header.jsp\";confirm`XSS`//", Expect.SAFE)); // 실제 확인된 payload
+        cs.add(new Case("C2-BACKTICK-2", Ctx.JS_STRING, p2, Method.GET, "tp",
+                "\";confirm`XSS`//", Expect.SAFE)); // 앞의 "정상처럼 보이는 경로" 접두사가 없어도 되는지
+        cs.add(new Case("C2-BACKTICK-3", Ctx.JS_STRING, p2, Method.GET, "tp",
+                "';confirm`XSS`//", Expect.SAFE)); // 홑따옴표 버전
+        cs.add(new Case("C2-BACKTICK-4", Ctx.JS_STRING, p2, Method.GET, "tp",
+                "\";alert`XSS`//", Expect.SAFE)); // 다른 함수명으로도 재현되는지
+        cs.add(new Case("C2-BACKTICK-5", Ctx.JS_STRING, p2, Method.GET, "tp",
+                "\";document['locat'+'ion']='https://" + atk + "'//", Expect.SAFE)); // "location" 단어 자체를 문자열 분할로 회피
 
         // ===================================================================
         // Case3: /LGTSSO/portlets/salesPortlet.jsp  (tp) — HTML attribute 또는 이벤트 핸들러 컨텍스트 반사
@@ -223,6 +254,12 @@ public class XssDefenseTester {
         // (추가) XssBlockFilter 우회 시도 — 이벤트 핸들러 대소문자
         cs.add(new Case("C3-BYPASS-CASE", Ctx.HTML_ATTR, p3, Method.GET, "tp",
                 "\" OnMouseOver=\"alert(1)", Expect.SAFE));
+        // (추가) 파라미터 이름 대소문자 우회 확인
+        cs.add(new Case("C3-PARAMCASE-1", Ctx.HTML_ATTR, p3, Method.GET, "Tp",
+                "\" onmouseover=\"alert(1)", Expect.SAFE));
+        // (추가) 백틱 함수 호출 우회 — 이벤트 핸들러 속성 안에서도 "(" 없이 동작하는지 확인
+        cs.add(new Case("C3-BACKTICK-1", Ctx.HTML_ATTR, p3, Method.GET, "tp",
+                "\" onmouseover=confirm`XSS`", Expect.SAFE));
 
         // ===================================================================
         // Case4: /hub/hub.do  (returnURL) — JavaScript 컨텍스트 반사
@@ -245,6 +282,11 @@ public class XssDefenseTester {
                 "';location='https://" + atk + "';//", Expect.SAFE));
         cs.add(new Case("C4-JS-5", Ctx.JS_STRING, p4, Method.GET, "returnURL",
                 "</script><script>alert(1)</script>", Expect.SAFE));
+        // (추가) 백틱 함수 호출 우회 — "(" ")" 없이 confirm/alert 호출, blacklist 단어 회피
+        cs.add(new Case("C4-BACKTICK-1", Ctx.JS_STRING, p4, Method.GET, "returnURL",
+                "\";confirm`XSS`//", Expect.SAFE));
+        cs.add(new Case("C4-BACKTICK-2", Ctx.JS_STRING, p4, Method.GET, "returnURL",
+                "';confirm`XSS`//", Expect.SAFE));
 
         // (추가) returnURL 이동 대상 검증 — 문서 7.1 기준. HubSecurityInterceptor가 이 역할까지 하는지 확인.
         cs.add(new Case("C4-URL-1", Ctx.URL_MOVE, p4, Method.GET, "returnURL",
@@ -263,6 +305,15 @@ public class XssDefenseTester {
                 "https://" + reg + "/path", Expect.FUNCTIONAL));
         cs.add(new Case("C4-URL-8", Ctx.URL_MOVE, p4, Method.GET, "returnURL",
                 "http://" + reg + "/path", Expect.FUNCTIONAL));
+
+        // (추가) 파라미터 이름 대소문자 우회 확인 — HOST_NOT_ALLOWED 체크가 정확히 "returnURL" 키만
+        // 보고 있다면, 다른 대소문자로 보냈을 때 이 검증이 스킵되면서 값은 그대로 쓰이는지가 핵심 확인 포인트.
+        cs.add(new Case("C4-PARAMCASE-1", Ctx.URL_MOVE, p4, Method.GET, "RETURNURL",
+                "javascript:alert(1)", Expect.SAFE));
+        cs.add(new Case("C4-PARAMCASE-2", Ctx.URL_MOVE, p4, Method.GET, "ReturnUrl",
+                "//" + unreg + "/path", Expect.SAFE));
+        cs.add(new Case("C4-PARAMCASE-3", Ctx.JS_STRING, p4, Method.GET, "returnurl",
+                "';alert(1);//", Expect.SAFE));
 
         return cs;
     }
@@ -414,12 +465,17 @@ public class XssDefenseTester {
 
         private Result judgeJsString(Case c, String body, int status, boolean fired, String url) {
             String scripts = extractScripts(body);
-            String[] raw = { "\";fetch(", "';location=", "\";location=", "';fetch(",
-                    "');alert(", "';alert(", "\";alert(" };
-            for (String seq : raw)
-                if (scripts.contains(seq))
-                    return new Result(c, Verdict.FAIL,
-                            "JS breakout 시퀀스가 escape 없이 잔존 -> '" + seq + "'", status, fired, url);
+
+            // payload 문자열 자체(탈출 따옴표부터 끝까지)가 script 영역에 그대로(escape 없이)
+            // 남아있는지 직접 확인한다. 특정 함수명(alert/fetch/location)에 의존하는 고정 목록 대신
+            // 이 방식을 쓰면 confirm`XSS`처럼 "(" ")" 없는 백틱 호출 우회도 함수명과 무관하게 잡힌다.
+            // 선행 따옴표가 제대로 인코딩되면 이 매칭은 자연히 깨져서 안전한 경우는 걸리지 않는다.
+            if (scripts.contains(c.payload)) {
+                return new Result(c, Verdict.FAIL,
+                        "payload가 script 영역에 escape 없이 그대로 반사됨 -> '"
+                                + truncateForLog(c.payload, 60) + "'", status, fired, url);
+            }
+
             if (scripts.toLowerCase(Locale.ROOT).contains(cfg.attackerHost.toLowerCase(Locale.ROOT))
                     && !isLikelyEscaped(scripts, cfg.attackerHost))
                 return new Result(c, Verdict.FAIL,
@@ -505,6 +561,10 @@ public class XssDefenseTester {
             Matcher h = HREF.matcher(body);
             while (h.find()) sb.append(h.group()).append('\n');
             return sb.toString();
+        }
+
+        static String truncateForLog(String s, int n) {
+            return s.length() <= n ? s : s.substring(0, n) + "...";
         }
 
         static boolean isLikelyEscaped(String haystack, String needle) {
